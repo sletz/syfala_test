@@ -203,7 +203,7 @@ pub mod server {
     // borrows from buf
 
     #[inline]
-    pub fn recv_server_message<'b>(
+    pub fn recv_message<'b>(
         socket: &std::net::UdpSocket,
         buf: &'b mut [u8],
     ) -> io::Result<(

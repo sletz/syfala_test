@@ -69,7 +69,9 @@ impl Sender {
     ) -> Result<usize, num::TryFromIntError> {
         let drift = self.timer.drift(timestamp)?;
 
-        let chunk = self.tx.write_chunk_uninit(self.tx.slots()).unwrap();
+        let available_slots = self.tx.slots();
+
+        let chunk = self.tx.write_chunk_uninit(available_slots).unwrap();
 
         let written_samples = chunk.fill_from_iter(reshape_iter(drift, samples));
 
@@ -139,22 +141,30 @@ impl Receiver {
     /// pad with silence, or skip samples when necessary. Use `self.an_available_samples()` to
     /// empty the ring buffer.
     #[inline]
-    pub fn recv(
-        &mut self,
+    pub fn recv<'a>(
+        &'a mut self,
         timestamp: u64,
-        nominal_n_samples: usize,
-    ) -> Result<impl Iterator<Item = Sample>, num::TryFromIntError> {
-        let drift = self.timer.drift(timestamp)?;
+        outputs: impl IntoIterator<Item = &'a mut f32>,
+    ) -> Result<usize, num::TryFromIntError> {
+        let drift = self.timer.drift(timestamp)?.map(ops::Neg::neg);
 
-        let n_requested_frames = drift
-            .map(|drift| drift.total_samples(nominal_n_samples))
-            .unwrap_or(nominal_n_samples);
+        // if let Some(drift) = drift {
+        //     println!("{drift:?}");
+        // }
 
-        let chunk = self
-            .rx
-            .read_chunk(n_requested_frames.min(self.n_available_samples()))
-            .unwrap();
+        let available = self.n_available_samples();
 
-        Ok(reshape_iter(drift, chunk))
+        let chunk = self.rx.read_chunk(available).unwrap();
+
+        let written_samples = iter::zip(
+            reshape_iter(drift, chunk),
+            outputs,
+        )
+        .map(|(in_sample, out_sample)| *out_sample = in_sample)
+        .count();
+
+        self.timer.advance_timer(written_samples);
+
+        Ok(written_samples)
     }
 }

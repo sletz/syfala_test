@@ -1,5 +1,4 @@
 use super::*;
-use core::ops;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct Timer {
@@ -42,7 +41,8 @@ impl Timer {
     #[inline(always)]
     fn chunk_time(&self, chunk_size: num::NonZeroUsize) -> usize {
         // elapsed % chunk_size
-        usize::try_from(self.elapsed() % num::NonZeroU64::try_from(chunk_size).unwrap()).unwrap()
+        let elapsed = self.elapsed();
+        usize::try_from(elapsed % num::NonZeroU64::try_from(chunk_size).unwrap()).unwrap()
     }
 
     #[inline(always)]
@@ -99,17 +99,6 @@ impl Drift {
     }
 
     #[inline(always)]
-    pub(crate) fn total_samples(self, nominal_n_samples: usize) -> usize {
-        let abs = self.abs.get();
-
-        if self.negative {
-            nominal_n_samples.saturating_sub(abs)
-        } else {
-            nominal_n_samples.strict_add(abs)
-        }
-    }
-
-    #[inline(always)]
     pub(crate) const fn is_negative(&self) -> bool {
         self.negative
     }
@@ -117,6 +106,17 @@ impl Drift {
     #[inline(always)]
     pub(crate) const fn abs(&self) -> num::NonZeroUsize {
         self.abs
+    }
+}
+
+impl ops::Neg for Drift {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Self {
+            negative: !self.negative,
+            abs: self.abs,
+        }
     }
 }
 

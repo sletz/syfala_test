@@ -69,7 +69,7 @@ impl NetworkSender {
         self.sender.send(
             socket,
             addr,
-            chunk.into_iter(),
+            chunk,
         )
     }
 }
@@ -200,7 +200,7 @@ fn run_client(
         }
 
         if !any_ready {
-            std::thread::park_timeout(core::time::Duration::from_millis(150));
+            std::thread::park_timeout(core::time::Duration::from_millis(75));
         }
     }
 }

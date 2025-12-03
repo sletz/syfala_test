@@ -31,15 +31,15 @@ impl jack::ProcessHandler for AudioReceiver {
             self.rx.set_zero_timestamp(timestamp);
         }
 
-        let samples = self
+        let interleaved = self.interleaver.interleave(scope);
+
+        let _samples = self
             .rx
-            .recv(timestamp, scope.n_frames().try_into().unwrap())
+            .recv(
+                timestamp,
+                interleaved,
+            )
             .expect("ERROR: Huge drift");
-
-        for (in_sample, out_sample) in samples.zip(self.interleaver.interleave(scope)) {
-            *out_sample = in_sample;
-        }
-
         jack::Control::Continue
     }
 }
@@ -89,24 +89,27 @@ pub fn start(socket: &std::net::UdpSocket, config: AudioConfig) -> io::Result<In
     let mut client_map = HashMap::new();
 
     loop {
-        if let (addr, Some(message)) = server::recv_server_message(socket, &mut buf)? {
+        let (addr, message) = server::recv_message(socket, &mut buf)?;
+
+        if let Some(message) = message {
             match message {
                 server::ServerMessage::ClientDiscovery => {
                     server::send_config(socket, addr, config)?;
                     // NIGHTLY: #[feature(map_try_insert)] use try_insert instead
 
                     if !client_map.contains_key(&addr) {
-                        if let Ok((jack_client, receiver)) = start_jack_client(
+                        if let Ok((jack_client, sender)) = start_jack_client(
                             format!("Syfala\n{}\n{}", addr.ip(), addr.port()).as_str(),
                             &config,
                         ) {
-                            client_map.insert(addr, (receiver, jack_client));
+                            client_map.insert(addr, (sender, jack_client));
                         }
                     }
                 }
                 server::ServerMessage::ClientAudio { timestamp, samples } => {
-                    if let Some((receiver, _)) = client_map.get_mut(&addr) {
-                        receiver
+
+                    if let Some((sender, _)) = client_map.get_mut(&addr) {
+                        sender
                             .send(timestamp, samples)
                             .expect("ERROR: huge drift");
                     }
