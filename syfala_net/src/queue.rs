@@ -1,8 +1,11 @@
 use super::*;
 
+/// Convenience re-export of rtrb
+pub use rtrb;
+
 /// Sends audio data over a ring buffer, with an internal sample timer to track missed samples.
 ///
-/// Note that everything here is in samples, for multichannel data, some extra bookkeeping
+/// Note that everything here is in _samples_, for multichannel data, some extra bookkeeping
 /// might be needed.
 pub struct Sender {
     tx: rtrb::Producer<Sample>,
@@ -58,25 +61,17 @@ impl Sender {
 
     /// Writes the elements in `samples` into the sender's ring buffer, `timestamp` is used to
     /// pad with silence, or skip samples when necessary.
-    ///
-    /// # Panics
-    ///
-    /// It is a logic error for `ExactSizeIterator` to return less (or more) elements than indicated
-    /// by its `len()` method. This function may panic if such is the case.
     #[inline]
     pub fn send(
         &mut self,
         timestamp: u64,
-        mut samples: impl Iterator<Item = Sample>,
+        samples: impl Iterator<Item = Sample>,
     ) -> Result<usize, num::TryFromIntError> {
         let drift = self.timer.drift(timestamp)?;
 
-        let chunk = self
-            .tx
-            .write_chunk_uninit(self.tx.slots())
-            .unwrap();
+        let chunk = self.tx.write_chunk_uninit(self.tx.slots()).unwrap();
 
-        let written_samples = chunk.fill_from_iter(reshape_iter(drift, &mut samples));
+        let written_samples = chunk.fill_from_iter(reshape_iter(drift, samples));
 
         self.timer.advance_timer(written_samples);
 
@@ -84,6 +79,10 @@ impl Sender {
     }
 }
 
+/// Sends audio data from a ring buffer, with an internal sample timer to track missed samples.
+///
+/// Note that everything here is in _samples_, for multichannel data, some extra bookkeeping
+/// might be needed.
 pub struct Receiver {
     rx: rtrb::Consumer<Sample>,
     timer: timing::WakingTimer,

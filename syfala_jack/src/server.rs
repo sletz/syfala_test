@@ -1,6 +1,6 @@
-use syfala_net::queue;
-
 use super::*;
+
+use network::server;
 
 struct AudioReceiver {
     rx: queue::Receiver,
@@ -11,7 +11,7 @@ struct AudioReceiver {
 impl AudioReceiver {
     #[inline(always)]
     fn new(
-        rx: rtrb::Consumer<f32>,
+        rx: queue::rtrb::Consumer<f32>,
         waker: syfala_net::Waker,
         ports: impl IntoIterator<Item = jack::Port<jack::AudioOut>>,
     ) -> Option<Self> {
@@ -63,7 +63,7 @@ fn start_jack_client(
 
     println!("Allocating Ring Buffer ({rb_size_spls} samples)");
 
-    let (tx, rx) = rtrb::RingBuffer::<f32>::new(rb_size_spls.get());
+    let (tx, rx) = queue::rtrb::RingBuffer::<f32>::new(rb_size_spls.get());
 
     let sender = AudioReceiver::new(
         rx,
@@ -83,116 +83,35 @@ fn start_jack_client(
     Ok((async_client, receiver))
 }
 
-struct JackClientMap {
-    map: HashMap<core::net::SocketAddrV4, jack::AsyncClient<(), AudioReceiver>>,
-    event_tx: rtrb::Producer<(core::net::SocketAddrV4, queue::Sender)>,
-}
+pub fn start(socket: &std::net::UdpSocket, config: AudioConfig) -> io::Result<Infallible> {
+    let mut buf = [0u8; 2000];
 
-impl JackClientMap {
-    #[inline(always)]
-    pub fn new(event_tx: rtrb::Producer<(core::net::SocketAddrV4, queue::Sender)>) -> Self {
-        Self {
-            map: HashMap::new(),
-            event_tx,
-        }
-    }
+    let mut client_map = HashMap::new();
 
-    #[inline]
-    pub fn try_register_client(
-        &mut self,
-        name: &str,
-        addr: core::net::SocketAddrV4,
-        config: AudioConfig,
-    ) {
-        match self.map.entry(addr) {
-            Entry::Occupied(_) => {}
-            Entry::Vacant(e) => {
-                if let Ok((jack_client, sender)) = start_jack_client(name, &config) {
-                    e.insert(jack_client);
-                    self.event_tx
-                        .push((addr, sender))
-                        .expect("ERROR: Event queue too contended!");
+    loop {
+        if let (addr, Some(message)) = server::recv_server_message(socket, &mut buf)? {
+            match message {
+                server::ServerMessage::ClientDiscovery => {
+                    server::send_config(socket, addr, config)?;
+                    // NIGHTLY: #[feature(map_try_insert)] use try_insert instead
+
+                    if !client_map.contains_key(&addr) {
+                        if let Ok((jack_client, receiver)) = start_jack_client(
+                            format!("Syfala\n{}\n{}", addr.ip(), addr.port()).as_str(),
+                            &config,
+                        ) {
+                            client_map.insert(addr, (receiver, jack_client));
+                        }
+                    }
+                }
+                server::ServerMessage::ClientAudio { timestamp, samples } => {
+                    if let Some((receiver, _)) = client_map.get_mut(&addr) {
+                        receiver
+                            .send(timestamp, samples)
+                            .expect("ERROR: huge drift");
+                    }
                 }
             }
         }
     }
-}
-
-fn control_thread_run(
-    config: AudioConfig,
-    event_tx: rtrb::Producer<(core::net::SocketAddrV4, queue::Sender)>,
-    discovery_socket_addr: core::net::SocketAddr,
-    audio_socket_addr: core::net::SocketAddrV4,
-) -> io::Result<Infallible> {
-    let discovery_socket = std::net::UdpSocket::bind(discovery_socket_addr)?;
-    let mut client_map = JackClientMap::new(event_tx);
-
-    loop {
-        if let (source, Some(addr)) = network::discovery::accept_discovery(&discovery_socket)? {
-            let name = format!("SyFaLa\n{}\n{}", addr.ip(), addr.port());
-            client_map.try_register_client(name.as_str(), addr, config);
-
-            network::discovery::send_config(&discovery_socket, source, audio_socket_addr, config)?;
-        }
-    }
-}
-
-fn audio_network_thread_run(
-    mut event_rx: rtrb::Consumer<(core::net::SocketAddrV4, queue::Sender)>,
-    audio_socket_addr: core::net::SocketAddrV4,
-    mut control_thread_handle: Option<thread::JoinHandle<io::Result<Infallible>>>,
-) -> io::Result<Infallible> {
-    let mut tx_map = HashMap::new();
-    let audio_socket = std::net::UdpSocket::bind(audio_socket_addr)?;
-
-    // The main network thread loop
-    loop {
-        while let Ok((addr, tx)) = event_rx.pop() {
-            tx_map.insert(addr, tx);
-        }
-
-        let (source, timestamp, samples) = network::recv_audio_packet(&audio_socket)?;
-
-        let core::net::SocketAddr::V4(source) = source else {
-            continue;
-        };
-
-        if let Some(tx) = tx_map.get_mut(&source) {
-            tx.send(timestamp, samples).expect("ERROR: drift too huge");
-        }
-
-        if let Some(handle) = control_thread_handle.take_if(|h| h.is_finished()) {
-            return handle.join().unwrap();
-        }
-    }
-}
-
-const DEFAULT_DISCOVERY_SOCKET_ADDR: core::net::SocketAddrV4 =
-    core::net::SocketAddrV4::new(core::net::Ipv4Addr::LOCALHOST, 4451);
-
-const DEFAULT_AUDIO_SOCKET_ADDR: core::net::SocketAddrV4 =
-    core::net::SocketAddrV4::new(core::net::Ipv4Addr::LOCALHOST, 6910);
-
-const EVENT_QUEUE_LEN: num::NonZeroUsize = num::NonZeroUsize::new(1024).unwrap();
-
-pub fn jack_server_run() -> io::Result<Infallible> {
-    let (event_tx, event_rx) = rtrb::RingBuffer::new(EVENT_QUEUE_LEN.get());
-
-    let control_thread_handle = thread::spawn(move || {
-        control_thread_run(
-            AudioConfig::new(
-                num::NonZeroU32::new(8).unwrap(),
-                num::NonZeroU32::new(16).unwrap(),
-            ),
-            event_tx,
-            DEFAULT_DISCOVERY_SOCKET_ADDR.into(),
-            DEFAULT_AUDIO_SOCKET_ADDR,
-        )
-    });
-
-    audio_network_thread_run(
-        event_rx,
-        DEFAULT_AUDIO_SOCKET_ADDR,
-        Some(control_thread_handle),
-    )
 }

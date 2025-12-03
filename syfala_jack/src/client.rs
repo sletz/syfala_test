@@ -1,5 +1,7 @@
 use super::*;
 
+use network::client;
+
 struct AudioSender {
     tx: queue::Sender,
     interleaver: Box<interleaver::Interleaver<jack::AudioIn>>,
@@ -9,7 +11,7 @@ struct AudioSender {
 impl AudioSender {
     #[inline(always)]
     fn new(
-        tx: rtrb::Producer<f32>,
+        tx: queue::rtrb::Producer<f32>,
         waker: syfala_net::Waker,
         ports: impl IntoIterator<Item = jack::Port<jack::AudioIn>>,
     ) -> Option<Self> {
@@ -41,15 +43,15 @@ impl jack::ProcessHandler for AudioSender {
 }
 
 struct NetworkSender {
-    sender: network::Sender,
-    rx: rtrb::Consumer<f32>,
+    sender: client::AudioSender,
+    rx: queue::rtrb::Consumer<f32>,
 }
 
 impl NetworkSender {
     #[inline(always)]
-    fn new(rx: rtrb::Consumer<f32>, chunk_size_spls: num::NonZeroUsize) -> Self {
+    fn new(rx: queue::rtrb::Consumer<f32>, chunk_size_spls: num::NonZeroUsize) -> Self {
         Self {
-            sender: network::Sender::new(chunk_size_spls),
+            sender: client::AudioSender::new(chunk_size_spls),
             rx,
         }
     }
@@ -58,12 +60,16 @@ impl NetworkSender {
     fn try_send(
         &mut self,
         socket: &std::net::UdpSocket,
-        addr: core::net::SocketAddr,
+        addr: &core::net::SocketAddr,
     ) -> io::Result<bool> {
+
+        let slots = self.rx.slots();
+        let chunk = self.rx.read_chunk(slots).unwrap();
+
         self.sender.send(
             socket,
             addr,
-            self.rx.read_chunk(self.rx.slots()).unwrap().into_iter(),
+            chunk.into_iter(),
         )
     }
 }
@@ -89,7 +95,7 @@ fn start_jack_client(
 
     println!("Allocating Ring Buffer ({rb_size_spls} samples)");
 
-    let (tx, rx) = rtrb::RingBuffer::<f32>::new(rb_size_spls.get());
+    let (tx, rx) = queue::rtrb::RingBuffer::<f32>::new(rb_size_spls.get());
 
     let waker = syfala_net::Waker::new(network_thread_handle, chunk_size_spls);
 
@@ -111,175 +117,117 @@ fn start_jack_client(
     Ok((async_client, receiver))
 }
 
-struct JackClientMap {
-    map: HashMap<core::net::SocketAddrV4, (AudioConfig, jack::AsyncClient<(), AudioSender>)>,
-    event_tx: rtrb::Producer<(core::net::SocketAddrV4, NetworkSender)>,
-}
-
-impl JackClientMap {
-    #[inline(always)]
-    pub fn new(event_tx: rtrb::Producer<(core::net::SocketAddrV4, NetworkSender)>) -> Self {
-        Self {
-            map: HashMap::new(),
-            event_tx,
-        }
-    }
-
-    #[inline]
-    pub fn try_register_client(
-        &mut self,
-        name: &str,
-        addr: core::net::SocketAddrV4,
-        config: AudioConfig,
-        network_thread_handle: &thread::Thread,
-    ) {
-        match self.map.entry(addr) {
-            Entry::Occupied(mut e) => {
-                let (old_config, _) = e.get();
-
-                if old_config != &config {
-                    if let Ok((jack_client, net_sender)) =
-                        start_jack_client(name, &config, network_thread_handle.clone())
-                    {
-                        // the old client gets deactivated automatically here, in it's destructor
-                        let (_old_config, _old_client) = e.insert((config, jack_client));
-                        self.event_tx
-                            .push((addr, net_sender))
-                            .expect("ERROR: event queue too contended!");
-                    }
-                }
-            }
-            Entry::Vacant(e) => {
-                if let Ok((jack_client, net_sender)) =
-                    start_jack_client(name, &config, network_thread_handle.clone())
-                {
-                    e.insert((config, jack_client));
-                    self.event_tx
-                        .push((addr, net_sender))
-                        .expect("ERROR: event queue too contended!");
-                }
-            }
-        }
-    }
-}
-
-fn control_thread_run(
-    event_tx: rtrb::Producer<(core::net::SocketAddrV4, NetworkSender)>,
-    network_thread_handle: thread::Thread,
-    discovery_socket_addr: core::net::SocketAddr,
-    beacon_dest_addr: core::net::SocketAddr,
-    audio_socket_addr: core::net::SocketAddrV4,
-    beacon_period: core::time::Duration,
+#[inline(always)]
+fn run_beacon(
+    socket: &std::net::UdpSocket,
+    dest_addr: core::net::SocketAddr,
+    period: core::time::Duration,
 ) -> io::Result<Infallible> {
-    let discovery_socket = std::net::UdpSocket::bind(discovery_socket_addr)?;
-    discovery_socket.set_read_timeout(Some(core::time::Duration::from_millis(500)))?;
-    let mut client_map = JackClientMap::new(event_tx);
-
-    thread::scope(|s| {
-        // Thread 1: beacon
-        let beacon_thread_handle = s.spawn(|| {
-            loop {
-                syfala_net::network::discovery::send_discovery(
-                    &discovery_socket,
-                    beacon_dest_addr.into(),
-                    audio_socket_addr,
-                )?;
-
-                thread::sleep(beacon_period);
-            }
-        });
-
-        // Thread 2: discovery
-        loop {
-            if beacon_thread_handle.is_finished() {
-                return beacon_thread_handle.join().unwrap();
-            }
-
-            match syfala_net::network::discovery::accept_config(&discovery_socket) {
-                Ok(parsed) => {
-                    if let Some((addr, config)) = parsed {
-                        let client_name = format!("SyFaLa\n{}\n{}", addr.ip(), addr.port());
-
-                        // Audio (JACK) threads are created here
-                        client_map.try_register_client(
-                            client_name.as_str(),
-                            addr,
-                            config,
-                            &network_thread_handle,
-                        );
-                    }
-                },
-                Err(e) => if let io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut = e.kind() {
-                    continue;
-                },
-            }
-
-            
-        }
-    })
-}
-
-fn audio_network_thread_run(
-    mut event_rx: rtrb::Consumer<(core::net::SocketAddrV4, NetworkSender)>,
-    audio_socket_addr: core::net::SocketAddrV4,
-    mut control_thread_handle: Option<thread::JoinHandle<io::Result<Infallible>>>,
-) -> io::Result<Infallible> {
-    let mut rx_map = HashMap::new();
-    let audio_socket = std::net::UdpSocket::bind(audio_socket_addr)?;
-
-    // The main network thread loop
     loop {
-        if let Some(handle) = control_thread_handle.take_if(|h| h.is_finished()) {
+        client::send_discovery(&socket, dest_addr)?;
+        thread::sleep(period);
+    }
+}
+
+#[inline(always)]
+fn config_listen_run(
+    socket: &std::net::UdpSocket,
+    mut config_tx: queue::rtrb::Producer<(core::net::SocketAddr, AudioConfig)>,
+) -> io::Result<Infallible> {
+    loop {
+        if let (peer_addr, Some(config)) = client::try_recv_config(socket)? {
+            config_tx
+                .push((peer_addr, config))
+                .expect("config tx too contended!");
+        }
+    }
+}
+
+#[inline(always)]
+fn run_client(
+    socket: &std::net::UdpSocket,
+    mut config_rx: queue::rtrb::Consumer<(core::net::SocketAddr, AudioConfig)>,
+    mut beacon_thread: Option<thread::ScopedJoinHandle<io::Result<Infallible>>>,
+    mut listener_thread: Option<thread::ScopedJoinHandle<io::Result<Infallible>>>,
+) -> io::Result<Infallible> {
+    let mut client_map = HashMap::new();
+
+    let network_thread_handle = thread::current();
+
+    loop {
+        if let Some(handle) = beacon_thread.take_if(|h| h.is_finished()) {
             return handle.join().unwrap();
         }
 
-        while let Ok((addr, rx)) = event_rx.pop() {
-            // insert new clients (potentially replace old ones)
-            rx_map.insert(addr, rx);
+        if let Some(handle) = listener_thread.take_if(|h| h.is_finished()) {
+            return handle.join().unwrap();
+        }
+
+        // TODO? Ideally, this should be done on another thread. The current approach has the
+        // advantage of requiring way less bookkeeping, but might stall audio sending a bit
+        while let Ok((addr, config)) = config_rx.pop() {
+            match client_map.entry(addr) {
+                Entry::Occupied(e) => {
+                    let (old_sender, old_config, old_jack_client) = e.into_mut();
+                    if &config != old_config {
+                        if let Ok((jack_client, sender)) = start_jack_client(
+                            format!("SyFaLa\n{}\n{}", addr.ip(), addr.port()).as_str(),
+                            &config,
+                            network_thread_handle.clone(),
+                        ) {
+                            let _ = mem::replace(old_jack_client, jack_client);
+                            let _ = mem::replace(old_sender, sender);
+                            let _ = mem::replace(old_config, config);
+                        }
+                    }
+                },
+                Entry::Vacant(e) => {
+                    if let Ok((jack_client, sender)) = start_jack_client(
+                        format!("Syfala\n{}\n{}", addr.ip(), addr.port()).as_str(),
+                        &config,
+                        network_thread_handle.clone(),
+                    ) {
+                        e.insert((sender, config, jack_client));
+                    }
+                }
+            }
         }
 
         let mut any_ready = false;
 
-        for (&addr, rx) in &mut rx_map {
-            any_ready |= rx.try_send(&audio_socket, addr.into())?;
+        for (addr, (sender, _, _)) in client_map.iter_mut() {
+            any_ready |= sender.try_send(socket, addr)?;
         }
 
         if !any_ready {
-            thread::park();
+            std::thread::park_timeout(core::time::Duration::from_millis(150));
         }
     }
 }
 
-const DEFAULT_DISCOVERY_SENDER: core::net::SocketAddrV4 =
-    core::net::SocketAddrV4::new(core::net::Ipv4Addr::LOCALHOST, 4451);
+const EVENT_QUEUE_CAPACITY: usize = 1024;
 
-const DEFAULT_BEACON_DEST: core::net::SocketAddrV4 =
-    core::net::SocketAddrV4::new(core::net::Ipv4Addr::BROADCAST, 3581);
+#[inline]
+pub fn start(
+    socket: &std::net::UdpSocket,
+    beacon_dest: core::net::SocketAddr,
+    beacon_period: core::time::Duration,
+) -> io::Result<Infallible> {
+    let (config_tx, config_rx) = queue::rtrb::RingBuffer::new(EVENT_QUEUE_CAPACITY);
 
-const DEFAULT_AUDIO_SENDER: core::net::SocketAddrV4 =
-    core::net::SocketAddrV4::new(core::net::Ipv4Addr::LOCALHOST, 6910);
+    thread::scope(|s| {
+        // Thread 1: beacon
+        let beacon_thread = s.spawn(|| run_beacon(&socket, beacon_dest, beacon_period));
 
-const DEFAULT_BEACON_PERIOD: core::time::Duration = core::time::Duration::from_millis(250);
+        // Thread 2: listen for and report responses
+        let listener_thread = s.spawn(|| config_listen_run(&socket, config_tx));
 
-const EVENT_QUEUE_LEN: num::NonZeroUsize = num::NonZeroUsize::new(1024).unwrap();
-
-// NIGHTLY: use !
-pub fn jack_client_run() -> io::Result<Infallible> {
-    let network_thread_handle = thread::current();
-
-    let (event_tx, event_rx) =
-        rtrb::RingBuffer::<(core::net::SocketAddrV4, NetworkSender)>::new(EVENT_QUEUE_LEN.get());
-
-    let control_threads_handle = thread::spawn(move || {
-        control_thread_run(
-            event_tx,
-            network_thread_handle,
-            DEFAULT_DISCOVERY_SENDER.into(),
-            DEFAULT_BEACON_DEST.into(),
-            DEFAULT_AUDIO_SENDER,
-            DEFAULT_BEACON_PERIOD,
+        // Thread 3: audio sending and jack client creation
+        run_client(
+            &socket,
+            config_rx,
+            Some(beacon_thread),
+            Some(listener_thread),
         )
-    });
-
-    audio_network_thread_run(event_rx, DEFAULT_AUDIO_SENDER, Some(control_threads_handle))
+    })
 }

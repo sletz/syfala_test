@@ -2,11 +2,9 @@ use core::{iter, num};
 use std::{io, thread};
 
 pub mod network;
+#[cfg(feature = "rtrb")]
 pub mod queue;
 mod timing;
-
-/// Convenience re-export of rtrb
-pub use rtrb;
 
 #[inline(always)]
 const fn nz(x: usize) -> num::NonZeroUsize {
@@ -18,7 +16,7 @@ pub const SILENCE: Sample = 0.;
 
 pub const SAMPLE_SIZE: num::NonZeroUsize = nz(size_of::<Sample>());
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AudioConfig {
     n_channels: num::NonZeroU32,
     buffer_size_frames: num::NonZeroU32,
@@ -45,7 +43,8 @@ impl AudioConfig {
     /// This is the same as [`self.n_channels()`](Self::n_channels)` *
     /// `[`self.chunk_size_frames()`](Self::chunk_size_frames)
     #[inline(always)]
-    pub const fn chunk_size_samples(&self) -> num::NonZeroU32 {
+    pub fn chunk_size_samples(&self) -> num::NonZeroU32 {
+        println!("{self:?}");
         self.chunk_size_frames()
             .checked_mul(self.n_channels())
             .unwrap()

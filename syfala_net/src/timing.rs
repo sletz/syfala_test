@@ -151,7 +151,7 @@ impl WakingTimer {
         let rem_spls = self
             .timer
             .remaining_chunk_time(self.waker.chunk_size_samples());
-        if delta <= rem_spls.get() {
+        if delta >= rem_spls.get() {
             self.waker.wake();
         }
 
