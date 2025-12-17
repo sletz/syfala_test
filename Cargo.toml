@@ -3,6 +3,7 @@
 members = [
     "syfala_net",
     "syfala_jack",
+    "syfala_coreaudio",
 ]
 
 resolver = "2"
