@@ -7,35 +7,42 @@ use super::*;
 /// Convenience re-export of rtrb
 pub use rtrb;
 
+use core::iter;
+
 /// Sends audio data over a ring buffer, with an internal sample timer to track missed samples.
 ///
 /// Note that everything here is in __samples__, for multichannel data, some extra bookkeeping
 /// might be needed.
 pub struct Sender {
-    tx: rtrb::Producer<Sample>,
-    timer: timing::WakingTimer,
+    tx: rtrb::Producer<f32>,
+    counter: timing::WakingCounter,
 }
 
 impl Sender {
     #[inline(always)]
-    pub fn new(tx: rtrb::Producer<Sample>) -> Self {
+    pub fn new(tx: rtrb::Producer<f32>) -> Self {
         Self {
             tx,
-            timer: timing::WakingTimer::default(),
+            counter: timing::WakingCounter::default(),
         }
     }
 
     #[inline(always)]
-    pub fn with_waker(tx: rtrb::Producer<Sample>, waker: Waker) -> Self {
+    pub fn with_waker(tx: rtrb::Producer<f32>, waker: Waker) -> Self {
         Self {
             tx,
-            timer: timing::WakingTimer::with_waker(waker),
+            counter: timing::WakingCounter::with_waker(waker),
         }
     }
 
     #[inline(always)]
-    pub const fn set_zero_timestamp(&mut self, timestamp: u64) {
-        self.timer.set_zero_timestamp(timestamp);
+    pub const fn set_counter_value(&mut self, val: u64) {
+        self.counter.set_value(val);
+    }
+
+    #[inline(always)]
+    pub const fn get_counter_value(&self) -> u64 {
+        self.counter.get_value()
     }
 
     #[inline(always)]
@@ -55,60 +62,47 @@ impl Sender {
 
     #[inline(always)]
     pub fn waker(&self) -> &Waker {
-        self.timer.waker()
+        self.counter.waker()
     }
 
     #[inline(always)]
     pub fn waker_mut(&mut self) -> &mut Waker {
-        self.timer.waker_mut()
+        self.counter.waker_mut()
     }
+}
 
+impl TimedSender for Sender {
     /// Writes the elements in `samples` into the sender's ring buffer, `timestamp` is used to
     /// pad with silence, or skip samples when necessary.
     #[inline]
-    pub fn send(
-        &mut self,
-        timestamp: u64,
-        in_samples: impl IntoIterator<Item = Sample>,
-    ) -> Result<usize, num::TryFromIntError> {
-        let drift = self.timer.drift(timestamp)?;
+    fn send(&mut self, timestamp: u64, samples: impl IntoIterator<Item = f32>) -> usize {
+        let drift = self.counter.drift(timestamp).unwrap();
 
         let mut n_in_samples_skipped = 0;
         let mut n_out_samples_skipped = 0;
 
         if let Some(drift) = drift {
-            if drift.is_negative() {
-                n_in_samples_skipped = drift.abs().get();
+            *if drift.is_negative() {
+                &mut n_in_samples_skipped
             } else {
-                n_out_samples_skipped = drift.abs().get();
-            }
+                &mut n_out_samples_skipped
+            } = drift.abs().get();
         }
 
-        let n_available_slots = self.available_samples();
+        let out_iter = iter::chain(
+            iter::repeat_n(0., n_out_samples_skipped),
+            samples.into_iter().skip(n_in_samples_skipped),
+        );
 
-        let mut n_pushed_samples = n_out_samples_skipped.min(n_available_slots);
+        let n_pushed_samples = self
+            .tx
+            .write_chunk_uninit(self.tx.slots())
+            .unwrap()
+            .fill_from_iter(out_iter);
 
-        let mut chunk = self.tx.write_chunk_uninit(n_available_slots).unwrap();
-        let (start, end) = chunk.as_mut_slices();
+        self.counter.advance_timer(n_pushed_samples);
 
-        let out_samples = iter::chain(start, end);
-
-        for (out_sample, in_sample) in iter::zip(
-            out_samples.into_iter().skip(n_out_samples_skipped),
-            in_samples.into_iter().skip(n_in_samples_skipped),
-        ) {
-            out_sample.write(in_sample);
-            n_pushed_samples = n_pushed_samples.strict_add(1);
-        }
-
-        // SAFETY: Typically, or at least according to the docs, the safety argument here should
-        // be the fact that we have correctly initialized the first n_pushed_samples values. We
-        // _have not_. But, this is still ok because all bit patterns for f32 are valid.
-        unsafe { chunk.commit(n_pushed_samples) }
-
-        self.timer.advance_timer(n_pushed_samples);
-
-        Ok(n_pushed_samples)
+        n_pushed_samples
     }
 }
 
@@ -117,30 +111,30 @@ impl Sender {
 /// Note that everything here is in _samples_, for multichannel data, some extra bookkeeping
 /// might be needed.
 pub struct Receiver {
-    rx: rtrb::Consumer<Sample>,
-    timer: timing::WakingTimer,
+    rx: rtrb::Consumer<f32>,
+    counter: timing::WakingCounter,
 }
 
 impl Receiver {
     #[inline(always)]
-    pub fn new(rx: rtrb::Consumer<Sample>) -> Self {
+    pub fn new(rx: rtrb::Consumer<f32>) -> Self {
         Self {
             rx,
-            timer: timing::WakingTimer::default(),
+            counter: timing::WakingCounter::default(),
         }
     }
 
     #[inline(always)]
-    pub fn with_waker(rx: rtrb::Consumer<Sample>, waker: Waker) -> Self {
+    pub fn with_waker(rx: rtrb::Consumer<f32>, waker: Waker) -> Self {
         Self {
             rx,
-            timer: timing::WakingTimer::with_waker(waker),
+            counter: timing::WakingCounter::with_waker(waker),
         }
     }
 
     #[inline(always)]
-    pub const fn set_zero_timestamp(&mut self, timestamp: u64) {
-        self.timer.set_zero_timestamp(timestamp);
+    pub const fn set_counter_value(&mut self, val: u64) {
+        self.counter.set_value(val);
     }
 
     #[inline(always)]
@@ -160,52 +154,78 @@ impl Receiver {
 
     #[inline(always)]
     pub fn waker(&self) -> &Waker {
-        self.timer.waker()
+        self.counter.waker()
     }
 
     #[inline(always)]
     pub fn waker_mut(&mut self) -> &mut Waker {
-        self.timer.waker_mut()
+        self.counter.waker_mut()
     }
+}
 
-    /// Attempts to read `nominal_n_samples` samples from the ring buffer, `timestamp` is used to
+impl TimedReceiver for Receiver {
+    /// Attempts to read samples from the ring buffer, `sample_idx` is used to
     /// pad with silence, or skip samples when necessary.
     #[inline]
-    pub fn recv<'a>(
-        &'a mut self,
-        timestamp: u64,
-        out_samples: impl IntoIterator<Item = &'a mut f32>,
-    ) -> Result<usize, num::TryFromIntError> {
-        let drift = self.timer.drift(timestamp)?;
+    fn recv(&mut self, sample_idx: u64) -> impl Iterator<Item = f32> {
+        let drift = self.counter.drift(sample_idx).unwrap();
 
         // notice how neither are positive at the same time
         let mut n_out_samples_skipped = 0;
         let mut n_in_samples_skipped = 0;
 
         if let Some(drift) = drift {
-            if drift.is_negative() {
-                n_out_samples_skipped = drift.abs().get();
+            *if drift.is_negative() {
+                &mut n_out_samples_skipped
             } else {
-                n_in_samples_skipped = drift.abs().get();
-            }
+                &mut n_in_samples_skipped
+            } = drift.abs().get();
         }
 
-        let n_available_slots = self.n_available_samples();
+        let in_samples = self.rx.read_chunk(self.rx.slots()).unwrap();
 
-        let mut n_popped_samples = n_in_samples_skipped.min(n_available_slots);
+        iter::chain(
+            iter::repeat_n(0., n_out_samples_skipped),
+            ReadChunksIterWaker::new(in_samples, &mut self.counter).skip(n_in_samples_skipped),
+        )
+    }
+}
 
-        let in_samples = self.rx.read_chunk(n_available_slots).unwrap();
+struct ReadChunksIterWaker<'a, T> {
+    waker: &'a mut timing::WakingCounter,
+    iter: rtrb::chunks::ReadChunkIntoIter<'a, T>,
+    initial_len: usize,
+}
 
-        for (out_sample, in_sample) in iter::zip(
-            out_samples.into_iter().skip(n_out_samples_skipped),
-            in_samples.into_iter().skip(n_in_samples_skipped),
-        ) {
-            *out_sample = in_sample;
-            n_popped_samples = n_popped_samples.strict_add(1);
+impl<'a, T> ReadChunksIterWaker<'a, T> {
+    fn new(chunk: rtrb::chunks::ReadChunk<'a, T>, waker: &'a mut timing::WakingCounter) -> Self {
+        Self {
+            initial_len: chunk.len(),
+            iter: chunk.into_iter(),
+            waker,
         }
+    }
+}
 
-        self.timer.advance_timer(n_popped_samples);
+impl<'a, T> Iterator for ReadChunksIterWaker<'a, T> {
+    type Item = T;
 
-        Ok(n_popped_samples)
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next()
+    }
+}
+
+impl<'a, T> ExactSizeIterator for ReadChunksIterWaker<'a, T> {
+    fn len(&self) -> usize {
+        self.iter.len()
+    }
+}
+
+impl<T> Drop for ReadChunksIterWaker<'_, T> {
+    fn drop(&mut self) {
+        self.waker
+            // sent samples = initial samples - remaining samples
+            .advance_timer(self.initial_len.strict_sub(self.iter.len()));
     }
 }

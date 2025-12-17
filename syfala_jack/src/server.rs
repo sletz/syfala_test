@@ -1,11 +1,10 @@
 use super::*;
 
-use network::server;
-
 struct AudioReceiver {
     rx: queue::Receiver,
     interleaver: Box<interleaver::Interleaver<jack::AudioOut>>,
-    timestamp_unset: bool,
+    zero_timestamp: cell::OnceCell<u64>,
+    delay_in_samples: usize,
 }
 
 impl AudioReceiver {
@@ -13,102 +12,106 @@ impl AudioReceiver {
     fn new(
         rx: queue::rtrb::Consumer<f32>,
         waker: syfala_net::Waker,
+        delay_frames: usize,
         ports: impl IntoIterator<Item = jack::Port<jack::AudioOut>>,
     ) -> Option<Self> {
         interleaver::Interleaver::new(ports).map(|interleaver| Self {
             rx: queue::Receiver::with_waker(rx, waker),
+            delay_in_samples: delay_frames.strict_mul(interleaver.len().get()),
             interleaver,
-            timestamp_unset: true,
+            zero_timestamp: cell::OnceCell::new(),
         })
     }
 }
 
 impl jack::ProcessHandler for AudioReceiver {
+    #[inline(always)]
     fn process(&mut self, _client: &jack::Client, scope: &jack::ProcessScope) -> jack::Control {
-        let timestamp = u64::from(scope.last_frame_time());
-
-        if mem::take(&mut self.timestamp_unset) {
-            self.rx.set_zero_timestamp(timestamp);
+        if self.rx.n_available_samples() == 0 {
+            return jack::Control::Continue;
         }
 
-        let interleaved = self.interleaver.interleave(scope);
+        let jack_timestamp = u64::from(scope.last_frame_time());
 
-        let _samples = self
-            .rx
-            .recv(timestamp, interleaved)
-            .expect("ERROR: Huge drift");
+        let &zero_timestamp = self.zero_timestamp.get_or_init(|| jack_timestamp);
+
+        let timer_timestamp = jack_timestamp
+            .checked_sub(zero_timestamp)
+            // At the time of writing, PipeWire's JACK shim is susceptible of triggering this
+            .expect("JACK ERROR: buggy frame clock");
+
+        let mut interleaved = self.interleaver.interleave(scope);
+        let delay = self.delay_in_samples.min(interleaved.len());
+
+        self.delay_in_samples = self.delay_in_samples.strict_sub(delay);
+
+        // skip the first delay samples (jack buffers are already zeroed)
+        if let Some(d) = num::NonZeroUsize::new(delay) {
+            interleaved.nth(d.get().strict_sub(1));
+        }
+
+        for (jack_sample, rb_sample) in iter::zip(interleaved, self.rx.recv(timer_timestamp)) {
+            *jack_sample = rb_sample;
+        }
+
         jack::Control::Continue
     }
 }
 
-const DEFAULT_RB_SIZE_SECS: f64 = 4.;
-
-fn start_jack_client(
-    name: &str,
-    config: &AudioConfig,
-) -> Result<(jack::AsyncClient<(), AudioReceiver>, queue::Sender), jack::Error> {
-    let n_ports = num::NonZeroUsize::try_from(config.n_channels()).unwrap();
-
-    println!("Creating JACK client...");
-    let (jack_client, _status) = jack::Client::new(name, jack::ClientOptions::NO_START_SERVER)?;
-
-    let rb_size_frames =
-        num::NonZeroUsize::new((DEFAULT_RB_SIZE_SECS * jack_client.sample_rate() as f64) as usize)
-            .unwrap();
-
-    let rb_size_spls = rb_size_frames.checked_mul(n_ports).unwrap();
-
-    println!("Allocating Ring Buffer ({rb_size_spls} samples)");
-
-    let (tx, rx) = queue::rtrb::RingBuffer::<f32>::new(rb_size_spls.get());
-
-    let audio_rx = AudioReceiver::new(
-        rx,
-        syfala_net::Waker::useless(),
-        (1..=n_ports.get()).map(|i| {
-            jack_client
-                .register_port(&format!("output_{i}"), jack::AudioOut::default())
-                .unwrap()
-        }),
-    )
-    .unwrap();
-
-    let audio_tx = queue::Sender::new(tx);
-
-    let async_client = jack_client.activate_async((), audio_rx)?;
-
-    Ok((async_client, audio_tx))
+struct JackSender {
+    // we store this here to keep the jack client alive
+    #[allow(dead_code)]
+    async_client: jack::AsyncClient<(), AudioReceiver>,
+    audio_tx: queue::Sender,
 }
 
-pub fn start(socket: &std::net::UdpSocket, config: AudioConfig) -> io::Result<Infallible> {
-    let mut buf = [0u8; 2000];
-
-    let mut client_map = HashMap::new();
-
-    loop {
-        let (addr, message) = server::recv_message(socket, &mut buf)?;
-
-        if let Some(message) = message {
-            match message {
-                server::ServerMessage::ClientDiscovery => {
-                    server::send_config(socket, addr, config)?;
-                    // NIGHTLY: #[feature(map_try_insert)] use try_insert instead
-
-                    if !client_map.contains_key(&addr) {
-                        if let Ok((jack_client, sender)) = start_jack_client(
-                            format!("Syfala\n{}\n{}", addr.ip(), addr.port()).as_str(),
-                            &config,
-                        ) {
-                            client_map.insert(addr, (sender, jack_client));
-                        }
-                    }
-                }
-                server::ServerMessage::ClientAudio { timestamp, samples } => {
-                    if let Some((sender, _)) = client_map.get_mut(&addr) {
-                        sender.send(timestamp, samples).expect("ERROR: huge drift");
-                    }
-                }
-            }
-        }
+impl TimedSender for JackSender {
+    #[inline(always)]
+    fn send(&mut self, timestamp: u64, samples: impl IntoIterator<Item = f32>) -> usize {
+        self.audio_tx.send(timestamp, samples)
     }
+}
+
+pub fn start(
+    socket: &std::net::UdpSocket,
+    config: AudioConfig,
+    rb_length: core::time::Duration,
+    delay: core::time::Duration,
+) -> io::Result<Infallible> {
+    syfala_net::start_server(socket, config, |addr, config| {
+        let n_ports = num::NonZeroUsize::try_from(config.n_channels()).unwrap();
+
+        println!("Creating JACK client...");
+        let name = format!("Client\n{}\n{}", addr.ip(), addr.port());
+        let (jack_client, _status) =
+            jack::Client::new(name.as_str(), jack::ClientOptions::NO_START_SERVER).ok()?;
+
+        let sr = jack_client.sample_rate() as u128;
+
+        let rb_size_frames = (rb_length.as_nanos() * sr / 1_000_000_000) as usize;
+
+        let rb_size_spls = rb_size_frames.checked_mul(n_ports.get()).unwrap();
+
+        println!("Allocating Ring Buffer ({rb_size_spls} samples)");
+
+        let (tx, rx) = queue::rtrb::RingBuffer::<f32>::new(rb_size_spls);
+
+        let audio_rx = AudioReceiver::new(
+            rx,
+            syfala_net::Waker::useless(),
+            usize::try_from(delay.as_nanos() * sr / 1_000_000_000).unwrap(),
+            (1..=n_ports.get()).map(|i| {
+                jack_client
+                    .register_port(&format!("output_{i}"), jack::AudioOut::default())
+                    .unwrap()
+            }),
+        )
+        .unwrap();
+
+        let audio_tx = queue::Sender::new(tx);
+
+        let async_client = jack_client.activate_async((), audio_rx).ok()?;
+
+        Some(JackSender { async_client, audio_tx })
+    })
 }

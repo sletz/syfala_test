@@ -27,6 +27,12 @@ impl<Spec> Interleaver<Spec> {
         // SAFETY: We are a `#[repr(transparent)]` struct
         Some(unsafe { mem::transmute(boxed_slice) })
     }
+
+    #[inline(always)]
+    pub fn len(&self) -> num::NonZeroUsize {
+        // we return none when we create an interleaver with a channel count of 0
+        num::NonZeroUsize::new(self.ptrs.len()).unwrap()
+    }
 }
 
 mod private {

@@ -1,28 +1,21 @@
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct Timer {
-    zero: u64,
+struct Counter {
     curr: u64,
-    // invariant: current >= zero
 }
 
-impl Default for Timer {
+impl Default for Counter {
     #[inline(always)]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Timer {
+impl Counter {
     #[inline(always)]
     const fn new() -> Self {
-        Self { zero: 0, curr: 0 }
-    }
-
-    #[inline(always)]
-    const fn elapsed(&self) -> u64 {
-        self.curr.strict_sub(self.zero)
+        Self { curr: 0 }
     }
 
     #[inline(always)]
@@ -31,14 +24,9 @@ impl Timer {
     }
 
     #[inline(always)]
-    const fn zero(&self) -> u64 {
-        self.zero
-    }
-
-    #[inline(always)]
     fn chunk_time(&self, chunk_size: num::NonZeroUsize) -> usize {
         // elapsed % chunk_size
-        let elapsed = self.elapsed();
+        let elapsed = self.current();
         usize::try_from(elapsed % num::NonZeroU64::try_from(chunk_size).unwrap()).unwrap()
     }
 
@@ -55,18 +43,13 @@ impl Timer {
     }
 
     #[inline(always)]
-    const fn set_zero_timestamp(&mut self, timestamp: u64) {
-        self.curr = if timestamp < self.zero() {
-            self.curr.strict_sub(self.zero().strict_sub(timestamp))
-        } else {
-            self.curr.strict_add(timestamp.strict_sub(self.zero()))
-        };
-        self.zero = timestamp;
-    }
+    const fn set_value(&mut self, val: u64) {
+        self.curr = val;
+    } 
 
     #[inline(always)]
-    fn drift(&self, next_timestamp: u64) -> Result<Option<Drift>, num::TryFromIntError> {
-        Drift::new(self, next_timestamp)
+    fn drift(&self, next_idx: u64) -> Result<Option<Drift>, num::TryFromIntError> {
+        Drift::new(self, next_idx)
     }
 }
 
@@ -78,11 +61,11 @@ pub(crate) struct Drift {
 
 impl Drift {
     #[inline(always)]
-    fn new(timer: &Timer, next_timestamp: u64) -> Result<Option<Self>, num::TryFromIntError> {
+    fn new(timer: &Counter, next_idx: u64) -> Result<Option<Self>, num::TryFromIntError> {
         let c = timer.current();
-        usize::try_from(next_timestamp.abs_diff(c)).map(|abs| {
+        usize::try_from(next_idx.abs_diff(c)).map(|abs| {
             num::NonZeroUsize::new(abs).map(|abs| Self {
-                negative: next_timestamp < c,
+                negative: next_idx < c,
                 abs,
             })
         })
@@ -100,19 +83,19 @@ impl Drift {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct WakingTimer {
-    timer: timing::Timer,
+pub(crate) struct WakingCounter {
+    counter: timing::Counter,
     waker: Waker,
 }
 
-impl Default for WakingTimer {
+impl Default for WakingCounter {
     #[inline(always)]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl WakingTimer {
+impl WakingCounter {
     #[inline(always)]
     pub(crate) fn new() -> Self {
         Self::with_waker(Waker::useless())
@@ -121,7 +104,7 @@ impl WakingTimer {
     #[inline(always)]
     pub(crate) const fn with_waker(waker: Waker) -> Self {
         Self {
-            timer: timing::Timer::new(),
+            counter: timing::Counter::new(),
             waker,
         }
     }
@@ -129,13 +112,13 @@ impl WakingTimer {
     #[inline(always)]
     pub(crate) fn advance_timer(&mut self, delta: usize) {
         let rem_spls = self
-            .timer
+            .counter
             .remaining_chunk_time(self.waker.chunk_size_samples());
         if delta >= rem_spls.get() {
             self.waker.wake();
         }
 
-        self.timer.advance(delta);
+        self.counter.advance(delta);
     }
 
     #[inline(always)]
@@ -149,12 +132,17 @@ impl WakingTimer {
     }
 
     #[inline(always)]
-    pub(crate) const fn set_zero_timestamp(&mut self, timestamp: u64) {
-        self.timer.set_zero_timestamp(timestamp);
+    pub(crate) const fn set_value(&mut self, val: u64) {
+        self.counter.set_value(val);
     }
 
     #[inline(always)]
-    pub(crate) fn drift(&self, next_timestamp: u64) -> Result<Option<Drift>, num::TryFromIntError> {
-        self.timer.drift(next_timestamp)
+    pub(crate) const fn get_value(&self) -> u64 {
+        self.counter.current()
+    }
+
+    #[inline(always)]
+    pub(crate) fn drift(&self, next_idx: u64) -> Result<Option<Drift>, num::TryFromIntError> {
+        self.counter.drift(next_idx)
     }
 }
