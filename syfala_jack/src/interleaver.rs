@@ -1,6 +1,4 @@
-use super::*;
-
-use core::ptr;
+use core::{iter, mem, num, ptr};
 
 /// Allows interleaving samples, from a set of jack ports,
 /// but allocates space for the pointers only once

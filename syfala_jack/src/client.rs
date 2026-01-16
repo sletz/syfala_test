@@ -59,8 +59,8 @@ pub fn start(
     socket: &std::net::UdpSocket,
     beacon_dest: core::net::SocketAddr,
     beacon_period: core::time::Duration,
-    mut rb_length: impl FnMut(core::net::SocketAddr, AudioConfig) -> core::time::Duration,
-    mut delay: impl FnMut(core::net::SocketAddr, AudioConfig) -> core::time::Duration,
+    mut rb_length: impl FnMut(core::net::SocketAddr, StreamConfig) -> core::time::Duration,
+    mut delay: impl FnMut(core::net::SocketAddr, StreamConfig) -> core::time::Duration,
 ) -> io::Result<Infallible> {
     syfala_net::start_client(
         socket,
@@ -68,7 +68,7 @@ pub fn start(
         beacon_period,
         None,
         |addr, config, handle| {
-            let n_ports = num::NonZeroUsize::try_from(config.n_channels()).unwrap();
+            let n_ports = num::NonZeroUsize::try_from(config.n_channels).unwrap();
             let chunk_size_spls = num::NonZeroUsize::try_from(config.chunk_size_samples()).unwrap();
 
             println!("Creating JACK client...");

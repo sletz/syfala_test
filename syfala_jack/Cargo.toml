@@ -5,5 +5,8 @@ edition = "2024"
 
 [dependencies]
 
-syfala_net = { path = "../syfala_net" }
+syfala_network = { path = "../syfala_network" }
 jack = "0.13"
+
+[dev-dependencies]
+nohash = { version = "0.2" }

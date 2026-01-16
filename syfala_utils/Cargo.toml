@@ -1,0 +1,9 @@
+[package]
+name = "syfala_utils"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+rtrb = "0"
+syfala_proto = { path = "../syfala_proto" }

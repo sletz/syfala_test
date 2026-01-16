@@ -1,9 +1,11 @@
 [workspace]
 
 members = [
-    "syfala_net",
+    "syfala_proto",
     "syfala_jack",
     "syfala_coreaudio",
+    "syfala_network",
+    "syfala_utils",
 ]
 
 resolver = "2"

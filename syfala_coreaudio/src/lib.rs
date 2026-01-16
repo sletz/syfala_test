@@ -1981,7 +1981,10 @@ unsafe extern "C" fn get_zero_timestamp(
     //	For this device, the zero time stamps' sample time increments every kDevice_RingBufferSize
     //	frames and the host time increments by kDevice_RingBufferSize * gDevice_HostTicksPerFrame.
 
-    // Addendum: this method is how coreaudio determines when/how to apply drift correction.
+    // Addendum it is important to notice that a device's "sample rate", as specified by
+    // kAudioDevicePropertyNominalSampleRate, doesn't mean much, at least in our case. The
+    // important figure however is _that_ * kAudioDevicePropertyZeroTimeStampPeriod, aka the
+    // timestamp period in seconds, is what matters
 
     log::trace!("get_zero_timestamp");
 

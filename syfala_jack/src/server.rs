@@ -76,8 +76,8 @@ impl TimedSender for JackSender {
 pub fn start(
     socket: &std::net::UdpSocket,
     n_channels: num::NonZeroU32,
-    mut rb_length: impl FnMut(core::net::SocketAddr, AudioConfig) -> core::time::Duration,
-    mut delay: impl FnMut(core::net::SocketAddr, AudioConfig) -> core::time::Duration,
+    mut rb_length: impl FnMut(core::net::SocketAddr, StreamConfig) -> core::time::Duration,
+    mut delay: impl FnMut(core::net::SocketAddr, StreamConfig) -> core::time::Duration,
 ) -> io::Result<Infallible> {
     syfala_net::start_server(socket, |addr, req_config| {
         println!("Creating JACK client...");
@@ -86,11 +86,12 @@ pub fn start(
         let (jack_client, _status) =
             jack::Client::new(name.as_str(), jack::ClientOptions::NO_START_SERVER).ok()?;
 
-        let config = req_config.unwrap_or(AudioConfig::new(
+        let config = req_config.unwrap_or(StreamConfig {
             n_channels,
-            jack_client.buffer_size().try_into().unwrap(),
-        ));
-        let n_ports = num::NonZeroUsize::try_from(config.n_channels()).unwrap();
+            sample_rate: jack_client.buffer_size().try_into().unwrap(),
+            buffer_size_frames: jack_client.buffer_size().try_into().unwrap(),
+        });
+        let n_ports = num::NonZeroUsize::try_from(config.n_channels).unwrap();
 
         let sr = jack_client.sample_rate() as u128;
 
