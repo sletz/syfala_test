@@ -2,7 +2,7 @@
 //! Implementation of a simple protocol for real-time audio communication and discovery
 //! 
 //! The main idea is the following: A node in the network
-//! is a client, a server, or both
+//! is a client, or a server
 //! 
 //! A server exposes a device with a fixed set of input/outputs streams, and can send/receive
 //! audio as requested by clients connected to it.
