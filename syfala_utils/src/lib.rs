@@ -1,9 +1,9 @@
-//! Simple utilities use throughout implementations of our protocol
+//! Simple utilities used throughout implementations of our protocol
 
 // TODO: create common adapters for [AudioData<'a> sequence] -> [padded samples]
 // for different sample types
 
-use core::num;
+use core::{mem, num};
 pub mod queue;
 
 /// A small wrapper type used as a heartbeat (or any other message) timeout
@@ -116,7 +116,8 @@ impl<'a> UninitCursor<'a> {
         let (init, uninit) = unsafe { self.storage.split_at_unchecked(self.pos) };
 
         // SAFETY: we have initialized the first self.pos bytes in self.storage
-        (unsafe { init.assume_init_ref() }, uninit)
+        // NIGHTLY: #[feature()]
+        (unsafe { mem::transmute(init) }, uninit)
     }
 
     /// Return mutable references to the initialized and uninitialized portions of our buffer
@@ -125,7 +126,7 @@ impl<'a> UninitCursor<'a> {
 
         let (init, uninit) = unsafe { self.storage.split_at_mut_unchecked(self.pos) };
 
-        (unsafe { init.assume_init_mut() }, uninit)
+        (unsafe { mem::transmute(init) }, uninit)
     }
 }
 
@@ -137,7 +138,9 @@ impl<'a> std::io::Write for UninitCursor<'a> {
 
         let (_init, uninit) = self.split_mut();
 
-        uninit[..to_write].write_copy_of_slice(&buf[..to_write]);
+        for (dest, &src) in core::iter::zip(uninit, buf) {
+            dest.write(src);
+        }
 
         self.pos = self.pos.strict_add(to_write);
 

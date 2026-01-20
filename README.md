@@ -19,4 +19,14 @@ Multiple implementations of this protocol, for different backends, can be found 
  - [`syfala_jack`](syfala_jack) For the JACK backend.
  - [`syfala_coreaudio`](syfala_coreaudio) For the coreaudio backend
 
-Beware of clock drift, an issue unaddressed in any of the backends.
+Beware of clock drift, an issue unaddressed in all of the backends.
+
+You can run:
+
+```shell
+cargo doc --open -p <package_name>
+```
+
+(replacing <package_name> with the one of the crates listed above)
+
+To view the documentation for any of the crates above.
