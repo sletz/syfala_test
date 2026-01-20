@@ -1,8 +1,14 @@
+//! Client-side UDP network implementation
+
 use core::{convert::Infallible, net::SocketAddr};
 
 /// A client.
 /// 
 /// Encapsulates sending and receiving messages, as a client, over a UDP socket.
+/// 
+/// It is intentional that there are no methods in this type's public interface for
+/// receiving messages. If you wish to do so. You must start a client using the
+/// [`ClientState`] trait.
 #[derive(Debug)]
 pub struct Client {
     sock: std::net::UdpSocket,
@@ -39,10 +45,10 @@ impl Client {
         })
     }
 
-    /// Deserializes and receives a server message from the internal socket.
+    /// Receives, then deserializes a server message from the internal socket.
     /// 
-    /// Note that if a datagram was found, but couldn't be parsed as one of our messages,
-    /// then the `Option` is `None`.
+    /// Note that if a datagram was found, but couldn't be parsed as one of the protocol's
+    /// messages, then the `Option` is `None`.
     #[inline(always)]
     fn recv<'a>(
         &self,

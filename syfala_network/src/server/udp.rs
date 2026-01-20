@@ -1,9 +1,14 @@
-use core::{convert::Infallible, net::SocketAddr};
+//! Client-side UDP network implementation
 
+use core::{convert::Infallible, net::SocketAddr};
 
 /// A server.
 /// 
 /// Encapsulates sending and receiving messages, as a server, over a UDP socket.
+/// 
+/// It is intentional that there are no methods in this type's public interface for
+/// receiving messages. If you wish to do so. You must start a server using the
+/// [`ServerState`] trait.
 #[derive(Debug)]
 pub struct Server {
     sock: std::net::UdpSocket,

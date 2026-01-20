@@ -116,7 +116,7 @@ impl<'a> UninitCursor<'a> {
         let (init, uninit) = unsafe { self.storage.split_at_unchecked(self.pos) };
 
         // SAFETY: we have initialized the first self.pos bytes in self.storage
-        // NIGHTLY: #[feature()]
+        // NIGHTLY: #[feature(maybe_uninit_slice)] use assume_init_ref
         (unsafe { mem::transmute(init) }, uninit)
     }
 
@@ -126,6 +126,7 @@ impl<'a> UninitCursor<'a> {
 
         let (init, uninit) = unsafe { self.storage.split_at_mut_unchecked(self.pos) };
 
+        // NIGHTLY: #[feature(maybe_uninit_slice)] use assume_init_mut
         (unsafe { mem::transmute(init) }, uninit)
     }
 }
@@ -138,6 +139,7 @@ impl<'a> std::io::Write for UninitCursor<'a> {
 
         let (_init, uninit) = self.split_mut();
 
+        // NIGHTLY: #[feature(maybe_uninit_slice)] use write_copy_of_slice
         for (dest, &src) in core::iter::zip(uninit, buf) {
             dest.write(src);
         }

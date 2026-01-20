@@ -1,3 +1,3 @@
 # `syfala_jack` (incomplete)
 
-Contains an implementation of a network client and server for our protocol, allowing sending and receiving audio from jack clients.
+Contains an implementation, using `syfala_network` of the protocol, allowing sending and receiving duplex audio from jack clients.

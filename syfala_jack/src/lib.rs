@@ -5,7 +5,6 @@ mod interleaver;
 // We might have to do some manual encoding/decoding here, sadly.
 // Let's hope postcard and our utilities crate can help...
 
-
 const SAMPLE_SIZE: num::NonZeroUsize = num::NonZeroUsize::new(size_of::<f32>()).unwrap();
 
 /// Wraps a [`syfala_utils::MultichannelTx`] alongside an [`interleaver::Interleaver<AudioIn>`]
@@ -29,7 +28,6 @@ impl JackMultichannelTx {
         })
     }
 }
-
 
 /// Wraps a [`syfala_utils::MultichannelRx`] alongside an [`interleaver::Interleaver<AudioOut>`]
 /// 

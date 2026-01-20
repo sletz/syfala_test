@@ -1,5 +1,8 @@
+//! All message types sent by endpoints
+
 use serde::{Deserialize, Serialize};
 
+/// Represents the state of audio between a client and a server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum IOState<T = (), U = ()> {
     Start(T),
@@ -21,7 +24,7 @@ pub enum Error {
 // final, effective, serialized size a bit larger, meaning that your throughput takes a hit
 // esp. for audio messages
 
-/// Client-sent messages
+/// Messages sent by clients to connected servers
 pub mod client {
     use super::*;
 
@@ -38,7 +41,7 @@ pub mod client {
         RequestIOStateChange(IOState),
     }
 
-    // All messages sent from a client to a connected server.
+    /// All messages sent from a client to a connected server.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub enum Connected<'a> {
         /// Control messages
@@ -70,7 +73,7 @@ pub enum Client<'a> {
     Connected(#[serde(borrow)] client::Connected<'a>),
 }
 
-/// Server-sent messages
+/// Messages sent by servers to connected clients.
 pub mod server {
     use super::*;
 
@@ -81,7 +84,7 @@ pub mod server {
         IOStateChangeResult(IOState<Result<(), Error>, Result<(), Error>>),
     }
 
-    // All messages sent from a server to a connected client.
+    /// All messages sent from a server to a connected client.
     #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
     pub enum Connected<'a> {
         /// Control Messages

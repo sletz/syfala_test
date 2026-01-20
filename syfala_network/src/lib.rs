@@ -1,3 +1,7 @@
+//! Implementation of the message model, defined in the `syfala_proto` crate, that enables sending
+//! and receiving messages over UDP sockets, as well as simple traits encapsulating the states
+//! and callbacks for clients and servers.
+
 pub mod server;
 pub mod client;
 

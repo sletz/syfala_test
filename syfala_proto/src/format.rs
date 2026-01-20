@@ -1,3 +1,5 @@
+//! All types related to audio stream formats.
+
 use alloc::boxed::Box;
 use core::{fmt, num};
 use serde::{Deserialize, Serialize};
@@ -23,21 +25,21 @@ pub enum SampleType {
 
 impl SampleType {
 
-    /// Returns whether this is a signed format (includes floats)
+    /// Returns whether this is a signed format (includes floats).
     #[inline(always)]
     pub const fn is_signed(self) -> bool {
         use SampleType::*;
         matches!(self, I8 | I16 | I24 | I32 | IEEF32 | IEEF64)
     }
 
-    /// Returns whether this is a floating point format
+    /// Returns whether this is a floating point format.
     #[inline(always)]
     pub fn is_float(self) -> bool {
         use SampleType::*;
         matches!(self, IEEF32 | IEEF64)
     }
 
-    /// Returns the number of bytes occupied by a sample in this format
+    /// Returns the number of bytes occupied by a sample in this format.
     #[inline(always)]
     pub const fn sample_size(self) -> num::NonZeroU8 {
         use SampleType::*;
@@ -53,7 +55,7 @@ impl SampleType {
     }
 }
 
-/// A newtype wrapper around a sample rate, as an `f64`
+/// A newtype wrapper around a sample rate, as a `f64`.
 ///
 /// The inner value is always positive and normal.
 #[derive(Clone, Copy, PartialEq, PartialOrd, Debug, Serialize, Deserialize)]
@@ -98,7 +100,7 @@ impl TryFrom<f64> for SampleRate {
     }
 }
 
-/// A newtype wapper around an integer representing a channel count
+/// A newtype wapper around an integer representing a channel count.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 pub struct ChannelCount(pub num::NonZeroU32);
 
@@ -113,8 +115,8 @@ pub struct Format {
     pub channel_count: ChannelCount,
     /// Important: This value is in ___frames___
     ///
-    /// Note that this field typically serves as a hint for senders, to help them decide how
-    /// fast to send data and is in no way a constraint on packet contents/sizes
+    /// Note that this field typically serves as a hint to help clients decide how
+    /// fast to send/play data and is in no way a constraint on packet contents/sizes.
     pub buffer_size: Option<BufferSize>,
     pub sample_type: SampleType,
 }
@@ -154,7 +156,8 @@ impl Format {
     }
 }
 
-/// Represents _all_ the stream formats of a server.
+/// Represents _all_ the stream formats of a server. When IO starts, clients must expect
+/// audio data from _all_ input streams, and servers must expect data from _all_ output streams.
 /// 
 /// __Important:__
 /// 
@@ -172,8 +175,8 @@ impl Format {
 /// 
 /// 
 /// For example, a server advertising 2 48khz input streams and 3 96khz output streams expects to
-/// __receive__ 3 96khz audio streams from each client, and should __send__ 2 48khz audio streams to
-/// each client.
+/// __receive__ __exactly__ 3 96khz audio streams from each client, __and__ should __send__
+/// __exactly__ 2 48khz audio streams to each client.
 #[derive(Debug, Default, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct StreamFormats {
     pub inputs: Box<[Format]>,

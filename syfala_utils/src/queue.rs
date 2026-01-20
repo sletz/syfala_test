@@ -41,7 +41,7 @@ impl PeriodicCounter {
 }
 
 /// Aggregates the producer side of a ring buffer, and a periodic counter,
-/// enabling the user to (e.g.) periodically wake a thread when engough data is sent to it.
+/// enabling the user to (e.g.) periodically wake a thread when enough data is sent to it.
 #[derive(Debug)]
 pub struct PeriodicWakingTx<T> {
     pub tx: rtrb::Producer<T>,
