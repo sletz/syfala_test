@@ -214,63 +214,6 @@ pub fn shift_iter<I: IntoIterator>(
     )
 }
 
-/// A receive-side adapter that associates values pulled from a ring buffer
-/// with a monotonically increasing external counter.
-/// 
-/// This allows consumers of a ring buffer to request data aligned to a specific
-/// index, transparently handling gaps and overruns, lazily, and without allocations.
-/// 
-/// Useful for decoupling data production and consumption, handling packet loss, audio cycle
-/// skips, and jitter. All while receiving data according to a stable, logical timeline.
-pub struct IndexedRx<Counter, Elem> {
-    rx: rtrb::Consumer<Elem>,
-    counter: Counter,
-}
-
-impl<Counter, Elem> IndexedRx<Counter, Elem> {
-    /// Creates a new `IndexedRx` from a ring buffer consumer and a counter.
-    ///
-    /// The counter is assumed to represent the logical index corresponding
-    /// to the next value expected from the consumer.
-    /// 
-    /// Ideally, at the time of calling this function `counter.current()` should
-    /// return 0. 
-    #[inline(always)]
-    pub fn new(rx: rtrb::Consumer<Elem>, counter: Counter) -> Self {
-        Self { rx, counter }
-    }
-}
-
-impl<Ctr: Counter, Elem> IndexedRx<Ctr, Elem> {
-    /// Attempts to receive all currently available values from the ring buffer
-    /// and align them to the requested logical index.
-    ///
-    /// The `idx` parameter represents the desired logical index of the first
-    /// returned element. If the underlying data stream is ahead or behind
-    /// this index, the returned iterator is adjusted accordingly:
-    ///
-    /// - If data is *ahead*, excess elements are skipped.
-    /// - If data is *behind*, missing elements are synthesized using `pad_fn`.
-    ///
-    /// This method never blocks and performs no allocation. All adjustments
-    /// are applied lazily via iterator composition.
-    // TODO: we cannot implement ExactSizeIterator for this, because Chain doesn't
-    // implement it for some reason, even though it's size is known.
-    #[inline]
-    pub fn recv(&mut self, idx: u64, pad_fn: impl FnMut() -> Elem) -> impl IntoIterator<Item = Elem> {
-        let deviation: isize = idx
-            .checked_signed_diff(self.counter.current())
-            .unwrap()
-            .try_into()
-            .unwrap();
-
-        let in_samples = consumer_get_all(&mut self.rx);
-        let iter = ReadChunksIterCounter::new(in_samples, &mut self.counter);
-
-        shift_iter(iter, deviation, pad_fn)
-    }
-}
-
 /// An iterator, wrapping a [`rtrb::chunks::ReadChunkIntoIter`], that, upon destruction,
 /// increments a [`Counter`] with the number of items consumed.
 // TODO: I'm not sure if it's better for this to increment the counter on every iteration
@@ -327,8 +270,95 @@ impl<'a, C: Counter, T> Drop for ReadChunksIterCounter<'a, C, T> {
             .advance(self.initial_len.strict_sub(self.iter.len()));
 
         // i have raised an issue in the rtrb repo (https://github.com/mgeier/rtrb/issues/155)
-        // when it gets fixed, and published, we can remove our initial len field
+        // when it gets fixed, and published, we can remove our initial_len field
         // and just use the new method
+    }
+}
+
+/// Acquires a write chunk covering all available producer slots.
+#[inline(always)]
+pub fn producer_get_all<T>(tx: &mut rtrb::Producer<T>) -> rtrb::chunks::WriteChunkUninit<'_, T> {
+    tx.write_chunk_uninit(tx.slots()).unwrap()
+}
+
+/// Acquires a read chunk covering all available consumer slots.
+#[inline(always)]
+pub fn consumer_get_all<T>(rx: &mut rtrb::Consumer<T>) -> rtrb::chunks::ReadChunk<'_, T> {
+    rx.read_chunk(rx.slots()).unwrap()
+}
+
+/// A receive-side adapter that associates values pulled from a ring buffer
+/// with a monotonically increasing external counter.
+/// 
+/// This allows consumers of a ring buffer to request data aligned to a specific
+/// index, transparently handling gaps and overruns, lazily, and without allocations.
+/// 
+/// Useful for decoupling data production and consumption, handling packet loss, audio cycle
+/// skips, and jitter. All while receiving data according to a stable, logical timeline.
+pub struct IndexedRx<Counter, Elem> {
+    rx: rtrb::Consumer<Elem>,
+    counter: Counter,
+}
+
+impl<Counter, Elem> IndexedRx<Counter, Elem> {
+    /// Creates a new `IndexedRx` from a ring buffer consumer and a counter.
+    /// 
+    /// The counter is assumed to represent the logical index corresponding
+    /// to the next value expected from the consumer.
+    /// 
+    /// Ideally, at the time of calling this function `counter.current()` should
+    /// return 0. 
+    #[inline(always)]
+    pub fn new(rx: rtrb::Consumer<Elem>, counter: Counter) -> Self {
+        Self { rx, counter }
+    }
+}
+
+impl<Ctr: Counter, Elem> IndexedRx<Ctr, Elem> {
+    /// Attempts to receive all currently available values from the ring buffer
+    /// and align them to the requested logical index.
+    ///
+    /// The `idx` parameter represents the desired logical index of the first
+    /// returned element. If the underlying data stream is ahead or behind
+    /// this index, the returned iterator is adjusted accordingly:
+    ///
+    /// - If data is *ahead*, excess elements are skipped.
+    /// - If data is *behind*, missing elements are synthesized using `pad_fn`.
+    ///
+    /// This method never blocks and performs no allocation. All adjustments
+    /// are applied lazily via iterator composition.
+    // TODO: we cannot implement ExactSizeIterator for this, because Chain doesn't
+    // implement it for some reason, even though it's size is known.
+    #[inline]
+    pub fn recv(&mut self, idx: u64, pad_fn: impl FnMut() -> Elem) -> impl IntoIterator<Item = Elem> {
+        let deviation: isize = idx
+            .checked_signed_diff(self.counter.current())
+            .unwrap()
+            .try_into()
+            .unwrap();
+
+        let in_samples = consumer_get_all(&mut self.rx);
+        let iter = ReadChunksIterCounter::new(in_samples, &mut self.counter);
+
+        shift_iter(iter, deviation, pad_fn)
+    }
+
+    /// Returns the current value of the internal conter.
+    #[inline(always)]
+    pub fn current(&self) -> u64 {
+        self.counter.current()
+    }
+
+    /// Returns the number of elements that can be read at the moment this function was called
+    #[inline(always)]
+    pub fn available_slots(&self) -> usize {
+        self.rx.slots()
+    }
+
+    /// Returns whether the producer side of the ring buffer has been destroyed.
+    #[inline(always)]
+    pub fn is_abandoned(&self) -> bool {
+        self.rx.is_abandoned()
     }
 }
 
@@ -340,45 +370,45 @@ impl<'a, C: Counter, T> Drop for ReadChunksIterCounter<'a, C, T> {
 ///
 /// Useful for decoupling data production and consumption, handling packet loss, audio cycle
 /// skips, and jitter. All while sending data according to a stable, logical timeline.
-pub struct IndexedTx<C, T> {
-    counter: C,
-    tx: rtrb::Producer<T>,
+pub struct IndexedTx<Counter, Elem> {
+    counter: Counter,
+    tx: rtrb::Producer<Elem>,
 }
 
-impl<C, T> IndexedTx<C, T> {
+impl<Counter, Elem> IndexedTx<Counter, Elem> {
     /// Creates a new `IndexedTx` from a ring buffer producer and a counter.
     ///
     /// The counter is assumed to represent the logical index corresponding
     /// to the next element that will be written into the producer.
     #[inline(always)]
-    pub const fn new(tx: rtrb::Producer<T>, counter: C) -> Self {
+    pub const fn new(tx: rtrb::Producer<Elem>, counter: Counter) -> Self {
         Self { counter, tx }
     }
 }
 
-impl<C: Counter, T> IndexedTx<C, T> {
+impl<Ctr: Counter, Elem> IndexedTx<Ctr, Elem> {
     /// Attempts to write the elements from the provided iterater into the ring buffer
     /// and align them to the requested logical index.
-    ///
+    /// 
     /// The `idx` parameter represents the desired logical index of the first
     /// written element. If the underlying data stream is ahead or behind
     /// this index, the returned iterator is adjusted accordingly:
-    ///
+    /// 
     /// - If data is *ahead*, missing elements are synthesized using `pad_fn`.
     /// - If data is *behind*, excess elements skipped.
-    ///
+    /// 
     /// This method never blocks and performs no allocation. All adjustments
     /// are applied lazily via iterator composition.
     /// 
     /// This method will silently not write the remaining elements
-    /// if the ring buffer's capacity is too small. The internal counter, however,
-    /// will have kept track of the number of elements written.
+    /// if the ring buffer's capacity is too small. The internal counter will
+    /// have kept track of the number of elements written.
     #[inline]
     pub fn send(
         &mut self,
         idx: u64,
-        values: impl IntoIterator<Item = T>,
-        pad_fn: impl FnMut() -> T,
+        values: impl IntoIterator<Item = Elem>,
+        pad_fn: impl FnMut() -> Elem,
     ) {
         let deviation: isize = self.counter.current()
             .checked_signed_diff(idx)
@@ -409,16 +439,4 @@ impl<C: Counter, T> IndexedTx<C, T> {
     pub fn is_abandoned(&self) -> bool {
         self.tx.is_abandoned()
     }
-}
-
-/// Acquires a write chunk covering all available producer slots.
-#[inline(always)]
-pub fn producer_get_all<T>(tx: &mut rtrb::Producer<T>) -> rtrb::chunks::WriteChunkUninit<'_, T> {
-    tx.write_chunk_uninit(tx.slots()).unwrap()
-}
-
-/// Acquires a read chunk covering all available consumer slots.
-#[inline(always)]
-pub fn consumer_get_all<T>(rx: &mut rtrb::Consumer<T>) -> rtrb::chunks::ReadChunk<'_, T> {
-    rx.read_chunk(rx.slots()).unwrap()
 }

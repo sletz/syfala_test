@@ -1,21 +1,21 @@
 #![no_std]
 //! A simple, low-latency protocol for real-time audio communication and discovery.
-//!
+//! 
 //! This crate defines a message-based protocol intended for real-time audio
 //! streaming between networked endpoints.
-//!
+//! 
 //! ## Roles
-//!
+//! 
 //! Each endpoint acts as either a **client** or a **server**:
-//!
+//! 
 //! - **Servers** are typically firmware running on external or embedded devices.
-//! - **Clients** are typically drivers or applications running on consumer hardware.
-//!
+//! - **Clients** are typically drivers or applications running on user machines.
+//! 
 //! ## Protocol model
-//!
+//! 
 //! The protocol is defined entirely in terms of typed messages exchanged between
 //! endpoints. These messages fall into three broad categories:
-//!
+//! 
 //! - **Discovery messages**
 //! - **Connection messages**
 //! - **Control messages**
@@ -25,53 +25,55 @@
 //! 
 //! ## Discovery
 //! 
-//! Discovery messages are sent by clients over broadcast addresses to make themselves visible
-//! to severs on the network, senrvers may then respond, if they wish, with a connection message
-//! to request to establish a connection.
-//!
+//! Discovery messages are sent by clients (typically over broadcast addresses) to make themselves
+//! visible to severs on the network, servers may then respond, if they wish, with a connection
+//! message to request to establish a connection.
+//! 
 //! ## Connection
-//!
+//! 
 //! Connection messages are used to establish communication between endpoints. A server sends
 //! a connection message to a client, (typically after receiving a discovery message from it)
 //! then the client may accept or refuse.
-//!
+//! 
 //! Once this exchange succeeds, a logical "connection" is established.
-//!
+//! At this point, both endpoints periodically exchange heartbeat messages to notify the other
+//! that the connection is still alive.
+//! 
 //! Servers advertise their supported stream formats as part of the connection
 //! message. These formats are **fixed for the lifetime of the connection** and
 //! define the audio formats used during active I/O.
-//!
+//! 
 //! If a client is incompatible with any advertised stream format, it must refuse
 //! the connection.
-//!
+//! 
 //! ## Control messages
-//!
+//! 
 //! Control messages are infrequent messages used to coordinate behavior between
-//! connected endpoints. Currently, they are limited to requests to start or stop
-//! audio I/O.
-//!
+//! connected endpoints. Currently, they are limited to requests made by clients to
+//! start or stop audio I/O, as well as the servers' responses to said requests.
+//! 
 //! Clients may request that audio I/O be started. Upon receiving such a request, servers
 //! must perform any required initialization, allocation, and clock anchoring **before**
 //! replying with a success response.
-//!
+//! 
 //! A successful response indicates that the server is _immediately_ ready to send and
 //! receive audio data.
-//!
+//! 
 //! If the server fails to start I/O, or explicitly refuses the request, it must report
 //! the failure back to the client.
-//!
-//! The same thing happens with Stopping IO, servers free the corresponding resources,
+//! 
+//! The same thing happens with stopping IO, servers free the corresponding resources,
 //! then report back.
-//!
+//! 
 //! ## Audio messages
-//!
+//! 
 //! When a connection is established and I/O is active, endpoints exchange audio
 //! messages.
-//!
+//! 
 //! Audio messages carry raw audio bytes along with stream indices and byte offsets
 //! to allow receivers to interpet how to decode the data and handle packet loss and
 //! reordering.
-//!
+//! 
 //! The types in this crate already implement `serde`'s `Serialize` and `Deserialize`
 //! traits, for the user to conveniently plug into other `serde` backends.
 

@@ -282,7 +282,11 @@ pub(crate) fn io_err_is_timeout(e: std::io::ErrorKind) -> bool {
 pub const AUDIO_STREAM_MESSAGE_HEADER_SIZE: usize = size_of::<u64>() + size_of::<u32>();
 pub const AUDIO_MESSAGE_HEADER_SIZE: usize = AUDIO_STREAM_MESSAGE_HEADER_SIZE + size_of::<u32>();
 
-pub trait UdpSock {
+/// Trait encapsulating the behavior of a synchronous (i.e. blocking) UDP socket.
+/// 
+/// We do this to allow easy integration of other, socket implementations, more flexible and
+/// performant than those of the standard library, notably `socket2`
+pub trait SyncUdpSock {
     fn send(&self, bytes: &[u8], dest_addr: core::net::SocketAddr) -> std::io::Result<()>;
 
     fn recv(
@@ -293,7 +297,7 @@ pub trait UdpSock {
     fn set_recv_timeout(&self, timeout: Option<core::time::Duration>) -> std::io::Result<()>;
 }
 
-impl UdpSock for std::net::UdpSocket {
+impl SyncUdpSock for std::net::UdpSocket {
     fn send(&self, bytes: &[u8], dest_addr: core::net::SocketAddr) -> std::io::Result<()> {
         self.send_to(bytes, dest_addr).and_then(|n| {
             (n == bytes.len())
@@ -313,53 +317,5 @@ impl UdpSock for std::net::UdpSocket {
     
     fn set_recv_timeout(&self, timeout: Option<core::time::Duration>) -> std::io::Result<()> {
         self.set_read_timeout(timeout)
-    }
-}
-
-/// A lightweight wrapper around [`std::time::Instant`] used to track timeouts.
-/// Stores the instant at which the timer was last reset.
-///
-/// This type is primarily intended for implementing heartbeat or inactivity
-/// timeouts in connection-like protocols built on top of UDP or other
-/// connectionless transports.
-///
-/// ```ignore
-/// let mut timer = ConnectionTimer::new();
-///
-/// // we have received a message from the peer.
-/// timer.reset();
-///
-/// if timer.elapsed() > TIMEOUT {
-///     // consider the peer disconnected
-/// }
-/// ```
-#[derive(Debug, Clone)]
-pub struct ConnectionTimer(std::time::Instant);
-
-impl Default for ConnectionTimer {
-    fn default() -> Self {
-        Self(std::time::Instant::now())
-    }
-}
-
-impl ConnectionTimer {
-    /// Creates a new timer starting at the current instant.
-    #[inline(always)]
-    pub fn new() -> Self {
-        Self(std::time::Instant::now())
-    }
-
-    /// Resets the timer to start measuring elapsed time from now.
-    ///
-    /// This discards any previously accumulated elapsed duration.
-    #[inline(always)]
-    pub fn reset(&mut self) {
-        *self = Self::new()
-    }
-
-    /// Returns the amount of time elapsed since the last reset.
-    #[inline(always)]
-    pub fn elapsed(&self) -> core::time::Duration {
-        self.0.elapsed()
     }
 }

@@ -31,7 +31,7 @@ impl ServerSocket {
     /// The provided `formats` are advertised to clients during connection
     /// establishment and remain fixed for the lifetime of the server.
     #[inline(always)]
-    pub fn new(sock: std::net::UdpSocket) -> Self {
+    pub const fn new(sock: std::net::UdpSocket) -> Self {
         Self { sock }
     }
 

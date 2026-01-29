@@ -1,5 +1,8 @@
 use core::num;
 
+// we write our own conversion traits to avoid depending on external
+// dependencies like bytemuck for such a simple case
+
 pub trait SampleSize {
     const SIZE: num::NonZeroU8;
 }
@@ -8,7 +11,7 @@ pub trait SampleFromBytes: SampleSize {
     /// # Panics
     ///
     /// if `slice.len() != Self::SIZE`
-    // TODO: when/if NIGHTLY: #[feature(min_generic_const_args)] lands, make `slice` a
+    // when/if NIGHTLY: #[feature(min_generic_const_args)] lands, make `slice` a
     // statically-sized array instead
     fn from_bytes(slice: &[u8]) -> Self;
 }
@@ -17,7 +20,7 @@ pub trait SampleToBytes: SampleSize {
     /// # Panics
     ///
     /// if `slice.len() != Self::SIZE`
-    // TODO: when/if NIGHTLY: #[feature(min_generic_const_args)] lands, return a
+    // when/if NIGHTLY: #[feature(min_generic_const_args)] lands, return a
     // statically-sized array instead
     fn to_bytes(self, slice: &mut [u8]);
 }

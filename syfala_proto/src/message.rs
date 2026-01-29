@@ -3,16 +3,16 @@
 use serde::{Deserialize, Serialize};
 
 // Similarly to what the rust compiler does when optimizing data type layouts. you'd probably want
-// to create new, flat enums (and deriving serde for them) that will be what gets (en/de)coded over
+// to create new, flat enums that will be what gets (en/de)coded over
 // the wire. This structural nesting of enums make the bytes occupied by discriminants,
-// unnecessarily large, meaning that your throughput gets imapcted, esp. for audio messages.
+// unnecessarily large, which can impact throughput, esp. for audio messages.
 
-/// Represents a requested or resulting audio I/O state transition.
+/// Represents a requested or resulting audio IO state transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum IOState<T = (), U = ()> {
-    /// Request or indicate that audio I/O should start.
+    /// Request or indicate that audio IO should start.
     Start(T),
-    /// Request or indicate that audio I/O should stop.
+    /// Request or indicate that audio IO should stop.
     Stop(U),
 }
 
@@ -31,13 +31,15 @@ pub mod client {
     /// Control messages sent from a client to a connected server.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     pub enum Control {
-        /// Requests a change in the audio I/O state.
+        /// Requests a change in the audio IO state.
         ///
         /// # Note
         /// 
-        /// When starting I/O, both sides must expect **all** advertised input
+        /// When starting IO, both sides must expect **all** advertised input
         /// and output streams to become active _simultaneously_, and for as long as IO is active.
         RequestIOStateChange(IOState),
+        /// Sent periodically to notify the server that our connection to them is still active.
+        Heartbeat,
     }
 
     /// Messages sent by a client after a connection is established.
@@ -62,7 +64,7 @@ pub enum Client {
     ConnectionResult(Result<(), Error>),
     /// Messages sent after a connection is established.
     Connected(client::Connected),
-    /// Sent to indicate that a connection is done,
+    /// Sent to indicate that a connection has been terminated.
     Disconnect,
 }
 
@@ -72,8 +74,10 @@ pub mod server {
     /// Control messages sent from a server to a connected client.
     #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
     pub enum Control {
-        /// Response to a client I/O state change request.
+        /// Response to a client IO state change request.
         IOStateChangeResult(IOState<Result<(), Error>, Result<(), Error>>),
+        /// Sent periodically to notify the server that our connection to them is still active.
+        Heartbeat,
     }
 
     /// Messages sent by a server after a connection is established.
@@ -92,10 +96,11 @@ pub mod server {
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Server {
     /// Requests to connect to a (assumed to be known) client.
-    /// Do not send this over broadcast addresses
+    /// 
+    /// Do not send this over broadcast addresses.
     Connect(crate::format::StreamFormats),
     /// Messages sent after a connection is established.
     Connected(server::Connected),
-    /// Sent to indicate that a connection is done,
+    /// Sent to indicate that a connection has been terminated.
     Disconnect,
 }

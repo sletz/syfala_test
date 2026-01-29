@@ -73,4 +73,39 @@ reordering.
 The types in this crate already implement `serde`'s `Serialize` and `Deserialize`
 traits, for the user to conveniently plug into other `serde` backends.
 
-TODO: missing heartbeat messages
+
+```
+Client                    Server
+  |                         |
+  | Discovery Request       |
+  |------------------------>|
+  |                         |
+  | Available Stream        |
+  | Formats                 |
+  |<------------------------|
+  |                         |
+  | Accept / Refuse         |
+  |------------------------>|
+  |                         |
+  | (Session Established    |
+  |    or Aborted)          |
+  |                         |
+  | <==== Heartbeats =====> |
+  |                         |
+  | Request IO Start        |
+  |------------------------>|
+  |                         |
+  |        IO Start Result  |
+  |<------------------------|
+  |                         |
+  | <===== Audio IO ======> |
+  |                         |
+  | Request IO Stop         |
+  |------------------------>|
+  |                         |
+  | IO Stop Result          |
+  |<------------------------|
+  |                         |
+  | (IO stopped, connection |
+  |  still active)          |
+```
