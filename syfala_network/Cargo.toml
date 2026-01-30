@@ -9,6 +9,9 @@ syfala_proto = { path = "../syfala_proto" }
 postcard = { version = "1", features = ["use-std"] }
 rustc-hash = { version = "2", optional = true }
 priority-queue = { version = "2", optional = true }
+
+# We need to use this crate to able to replace an object from a mutable reference
+# with a function that is supposed to consume it.
 replace_with = { version = "0.1.6", optional = true }
 
 [features]
