@@ -179,6 +179,20 @@ log = { version = "0.4", features = ["std"] }
 oslog = { version = "0.2", features = ["logger"] } # <- allows using apple unified logging system
 ```
 
+Then, run:
+
+```
+cargo build -r
+```
+
+Then, place the library, created in the following path:
+
+```
+target/release/lib_<YOUR_DRIVER_NAME>.dylib
+```
+
+in the appropriate `<YOUR_DRIVER>.driver/Contents/MacOS/` directory, then install it as explained above.
+
 ### Architecture of an `AudioServerPlugin`
 
 This section is more thoroughly explained in the code ([`lib.rs`](src/lib.rs)). We give an overview here, more detailed documentation can be found in the CoreAudio Headers as well. Usually you can follow the references to symbols from [Apple's Sample driver](https://developer.apple.com/documentation/coreaudio/creating-an-audio-server-driver-plug-in).
